@@ -3,10 +3,12 @@
 #include <iostream>
 #include <string>
 #include <vector>
+#include <math.h>
 #include "Eigen-3.3/Eigen/Core"
 #include "Eigen-3.3/Eigen/QR"
 #include "helpers.h"
 #include "json.hpp"
+
 
 // for convenience
 using nlohmann::json;
@@ -56,11 +58,21 @@ int main() {
   }
 
   // TODO variable
-  // ref_vel
-  // speed_diff
-  // max_accel
+  // ego car lane init
+  int ego_lane = 1;
+  // ego car ref_vel init
+  // TODO not suitable variable name
+  double ref_vel = 0.0; // MPH
+  // speed_diff; plus or minus by this diff while every changing;
+  // TDOO the bigger, the larger for jerk?
+  // TODO why .224?
+  const double speed_diff = .224;
+  // max_accel:
+  // TODO the limit of the speed?
+  const double max_accel = 49.5;
 
-  h.onMessage([&map_waypoints_x,&map_waypoints_y,&map_waypoints_s,
+  h.onMessage([&max_accel, &speed_diff, &ref_vel, &ego_lane,
+               &map_waypoints_x,&map_waypoints_y,&map_waypoints_s,
                &map_waypoints_dx,&map_waypoints_dy]
               (uWS::WebSocket<uWS::SERVER> ws, char *data, size_t length,
                uWS::OpCode opCode) {
@@ -90,8 +102,9 @@ int main() {
           // Previous path data given to the Planner
           auto previous_path_x = j[1]["previous_path_x"];
           auto previous_path_y = j[1]["previous_path_y"];
+          int previous_path_size = previous_path_x.size();
           // Previous path's end s and d values
-          // TODO end?
+          // TODO end?target?
           double end_path_s = j[1]["end_path_s"];
           double end_path_d = j[1]["end_path_d"];
 
@@ -116,6 +129,34 @@ int main() {
           // TODO prediction: predict what actions othe object might take
           // HERE we only care the nearest 3 car ahead (ahead, left ahead, right ahead)
           // type of prediction: trajectory but not all possible trajectories with probablity
+          // TODO what???
+          if (previous_path_size > 0) {
+            car_s = end_path_s
+          }
+          // ego car's env state (from other car) init
+          bool car_left = false; // is there a car left?
+          bool car_right = false; // is there a car right?
+          bool car_ahead = false; // is there a car ahead?
+
+          // check all car in sensor_fusion
+          for (int i = 0; i < sensor_fusion.size(); i++) {
+            // state of the checked car
+            double v_x = sensor_fusion[i][3];
+            double v_y = sensor_fusion[i][4];
+            double sigma_x = sensor_fusion[i][5];
+            float sigma_y = sensor_fusion[i][6];
+
+            int check_lane = floor(sigma_y/4);
+            double v = sqrt(v_x * v_x + v_y * v_y);
+            // sigma_x in the .02s future
+            sigma_x += (double)previous_path_size * v * 0.02;
+            // there is a car ahead and distance < 30
+            car_ahead |= (check_lane - lane) == 0 && (sigma_x - car_s) > 0 && (sigma_x - car_s) < 30
+            // there is a car left and distance < 30
+            car_left |= (check_lane - lane) == -1 && (sigma_x - car_s) > -30 && (sigma_x - car_s) < 30;
+            // there is a car right and distance < 30
+            car_right |= (check_lane - lane) == 1 && (sigma_x - car_s) > -30 && (sigma_x - car_s) < 30;
+          }
 
 
           // TODO behavior: stop, changing lane, acceleration,
