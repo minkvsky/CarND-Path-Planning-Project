@@ -146,7 +146,7 @@ int main() {
             double sigma_x = sensor_fusion[i][5];
             float sigma_y = sensor_fusion[i][6];
 
-            int check_lane = floor(sigma_y/4);
+            int check_lane = floor(sigma_y/4); // 0,1,2; 3 lanes with 4m width
             double v = sqrt(v_x * v_x + v_y * v_y);
             // sigma_x in the .02s future
             sigma_x += (double)previous_path_size * v * 0.02;
@@ -164,10 +164,19 @@ int main() {
           // "KL" - Keep Lane
           // "LCL" / "LCR"- Lane Change Left / Lane Change Right
           // "PLCL" / "PLCR" - Prepare Lane Change Left / Prepare Lane Change Right
-
-          // TODO update lane ? init 1 which stand middle?
-          // TODO update ref_val?
-
+          if(car_ahead) {
+            if(!car_left && lane > 0) {
+              lane--;
+            } else if(!car_right && lane < 2) {
+              lane++;
+            } else if(!car_left && lane < 2) {
+              lane++;
+            }else {
+              ref_vel -= speed_diff;
+            }
+          } else if(ref_vel < max_accel){
+            ref_vel += speed_diff;
+          }
 
           // TODO trajectory: find the best trajectory
           // TODO create spline from map_waypoints
