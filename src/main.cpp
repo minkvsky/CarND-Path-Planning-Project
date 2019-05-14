@@ -8,7 +8,7 @@
 #include "Eigen-3.3/Eigen/QR"
 #include "helpers.h"
 #include "json.hpp"
-
+#include "spline.h"
 
 // for convenience
 using nlohmann::json;
@@ -131,7 +131,7 @@ int main() {
           // type of prediction: trajectory but not all possible trajectories with probablity
           // TODO what???
           if (previous_path_size > 0) {
-            car_s = end_path_s
+            car_s = end_path_s;
           }
           // ego car's env state (from other car) init
           bool car_left = false; // is there a car left?
@@ -151,11 +151,11 @@ int main() {
             // sigma_x in the .02s future
             sigma_x += (double)previous_path_size * v * 0.02;
             // there is a car ahead and distance < 30
-            car_ahead |= (check_lane - lane) == 0 && (sigma_x - car_s) > 0 && (sigma_x - car_s) < 30
+            car_ahead |= (check_lane - ego_lane) == 0 && (sigma_x - car_s) > 0 && (sigma_x - car_s) < 30;
             // there is a car left and distance < 30
-            car_left |= (check_lane - lane) == -1 && (sigma_x - car_s) > -30 && (sigma_x - car_s) < 30;
+            car_left |= (check_lane - ego_lane) == -1 && (sigma_x - car_s) > -30 && (sigma_x - car_s) < 30;
             // there is a car right and distance < 30
-            car_right |= (check_lane - lane) == 1 && (sigma_x - car_s) > -30 && (sigma_x - car_s) < 30;
+            car_right |= (check_lane - ego_lane) == 1 && (sigma_x - car_s) > -30 && (sigma_x - car_s) < 30;
           }
 
 
@@ -165,12 +165,12 @@ int main() {
           // "LCL" / "LCR"- Lane Change Left / Lane Change Right
           // "PLCL" / "PLCR" - Prepare Lane Change Left / Prepare Lane Change Right
           if(car_ahead) {
-            if(!car_left && lane > 0) {
-              lane--;
-            } else if(!car_right && lane < 2) {
-              lane++;
-            } else if(!car_left && lane < 2) {
-              lane++;
+            if(!car_left && ego_lane > 0) {
+              ego_lane--;
+            } else if(!car_right && ego_lane < 2) {
+              ego_lane++;
+            } else if(!car_left && ego_lane < 2) {
+              ego_lane++;
             }else {
               ref_vel -= speed_diff;
             }
@@ -179,13 +179,95 @@ int main() {
           }
 
           // TODO trajectory: find the best trajectory
-          // TODO create spline from map_waypoints
+          // TODO create waypoints
+          vector<double> ptsx;
+          vector<double> ptsy;
+          // reference x, y, yaw
+          double ref_x;
+          double ref_y;
+          double ref_yaw;
+          double previous_ref_x;
+          double previous_ref_y;
+          if (previous_path_size >= 2) {
+            ref_x = previous_path_x[previous_path_size - 1];
+            ref_y = previous_path_y[previous_path_size - 1];
+            previous_ref_x = previous_path_x[previous_path_size - 2];
+            previous_ref_y = previous_path_y[previous_path_size - 2];
+            ref_yaw = atan2(ref_y - previous_ref_y, ref_x - previous_ref_x);
+          } else {
+            ref_x = car_x;
+            ref_y = car_y;
+            previous_ref_x = car_x - cos(car_yaw); // TODO WHAT??? use ref_x, ref_y, ref_yaw to compute previous_ref?
+            previous_ref_y = car_y - cos(car_yaw);
+            ref_yaw = deg2rad(car_yaw);
+          }
+          ptsx.push_back(previous_ref_x);
+          ptsy.push_back(previous_ref_y);
+          ptsx.push_back(ref_x);
+          ptsy.push_back(ref_y);
+
+          // Setting up target points in the future.
+          // TODO 30, 60, 90 ?
+          vector<double> next_wp0 = getXY(car_s + 30, 2 + 4*ego_lane, map_waypoints_s, map_waypoints_x, map_waypoints_y);
+          vector<double> next_wp1 = getXY(car_s + 60, 2 + 4*ego_lane, map_waypoints_s, map_waypoints_x, map_waypoints_y);
+          vector<double> next_wp2 = getXY(car_s + 90, 2 + 4*ego_lane, map_waypoints_s, map_waypoints_x, map_waypoints_y);
+
+          ptsx.push_back(next_wp0[0]);
+          ptsx.push_back(next_wp1[0]);
+          ptsx.push_back(next_wp2[0]);
+
+          ptsy.push_back(next_wp0[1]);
+          ptsy.push_back(next_wp1[1]);
+          ptsy.push_back(next_wp2[1]);
+
+          // localization
+          for (int i = 0; i < ptsx.size(); i++) {
+            double shift_x = ptsx[i] - ref_x;
+            double shift_y = ptsy[i] - ref_y;
+
+            ptsx[i] = shift_x * cos(0 - ref_yaw) - shift_y * sin(0 - ref_yaw);
+            ptsy[i] = shift_x * sin(0 - ref_yaw) + shift_y * cos(0 - ref_yaw);
+          }
+
+          // TODO create spline from localized map_waypoints
+          tk::spline s;
+          s.set_points(ptsx, ptsy);
+
+
           // TODO previous path for keepping continuous
+          for (int i = 0; i < previous_path_size; i++ ) {
+            next_x_vals.push_back(previous_path_x[i]);
+            next_y_vals.push_back(previous_path_y[i]);
+          }
           // TODO reference points ?Frenet
           // TODO local and global
           // TODO global to local
           // TODO predict by spline and 30m ?
-          // TODO local to global
+          // future plan by spline
+          double target_x = 30.0;
+          double target_y = s(target_x);
+          double target_dist = sqrt(target_x*target_x + target_y*target_y);
+          double x_add_on = 0; // TODO ?
+          for (int i = 1;i < 50 - previous_path_size;i++){
+            double N = target_dist/(0.02*ref_vel/2.24);// TODO ? split the goal? 2.24?speed_diff
+            double x_point = x_add_on + target_x/N;
+            double y_point = s(x_point);
+
+            x_add_on = x_point;
+
+            // TODO local to global
+            double x_ref = x_point;
+            double y_ref = y_point;
+            x_point = x_ref * cos(ref_yaw) - y_ref * sin(ref_yaw);
+            y_point = x_ref * sin(ref_yaw) + y_ref * cos(ref_yaw);
+            x_point += ref_x;
+            y_point += ref_y;
+
+            next_x_vals.push_back(x_point);
+            next_y_vals.push_back(y_point);
+          }
+
+
 
 
 
